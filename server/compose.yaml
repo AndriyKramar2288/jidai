@@ -1,0 +1,80 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"       # HTTP
+      - "443:443"     # HTTPS
+      - "8883:8883"   # MQTTS (захищений MQTT для залізяк)
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - mosquitto
+      - nodered
+      - servlets
+    networks:
+      - app-network
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mqtt-broker
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - app-network
+
+  nodered:
+    image: nodered/node-red:latest
+    container_name: nodered-server
+    restart: unless-stopped
+    user: "1000" # Запускаємо з правами звичайного юзера для безпеки
+    environment:
+      # Прокидаємо наші змінні всередину контейнера
+      - NODERED_USER=${NODERED_USER}
+      - NODERED_PASSWORD_HASH=${NODERED_PASSWORD_HASH}
+    volumes:
+      # Магія тут: накладаємо наш локальний конфіг поверх системного
+      - ./nodered/settings.js:/data/settings.js:ro
+      - nodered_data:/data
+    networks:
+      - app-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+
+  servlets:
+    image: jetty:11-jre21-alpine
+    container_name: lightweight-jetty
+    networks:
+      - app-network
+    environment:
+      - JAVA_OPTIONS=-Xmx512m -Xms256m
+      - SPRING_PROFILES_ACTIVE=servlet
+    volumes:
+      - ./webapps:/var/lib/jetty/webapps
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  pg_data:
+  mosquitto_data:
+  mosquitto_log:
+  nodered_data:

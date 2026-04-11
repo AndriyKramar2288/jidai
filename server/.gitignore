@@ -1,0 +1,6 @@
+.env
+certs/*
+!certs/.gitkeep
+tomcat/webapps/*
+!tomcat/webapps/.gitkeep
+webapps
