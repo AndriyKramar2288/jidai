@@ -1,9 +1,10 @@
 #include "secrets.h"
 
-// WIFI / MQTT
+// WIFI / MQTT / Bluetooth
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
+#include <NimBLEDevice.h>
 
 // PHOTODIODE
 #include <IRrecv.h>
@@ -14,18 +15,21 @@
 #include <U8g2lib.h>
 
 #include <ArduinoJson.h>
+#include <NonBlockingRtttl.h>
 
 // ------------- CUSTOMABLE -------------
 
 #define SCREEN_WIDTH 128  // Ширина екрану в пікселях
 #define SCREEN_HEIGHT 64  // Висота екрану в пікселях
+#define RGB_MAC "BE:27:FA:00:11:6C"
 
 // TOPICS
-#define LED_TOPIC           "jidai/capital/esp32main/led/cmd"
 #define GLOBAL_STATUS_TOPIC "jidai/capital/esp32main/global/lwt"
+#define LED_TOPIC           "jidai/capital/esp32main/led/cmd"
 #define DISPLAY_TOPIC       "jidai/capital/esp32main/display/cmd"
 #define BUZZER_TOPIC        "jidai/capital/esp32main/buzzer/cmd"
 #define RELAY_TOPIC         "jidai/capital/esp32main/relay/cmd"
+#define RGB_TOPIC           "jidai/capital/esp32main/rgb/cmd"
 #define PHOTORESISTOR_TOPIC "jidai/capital/esp32main/photoresistor/telemetry"
 #define PHOTOREC_TOPIC      "jidai/capital/esp32main/photorec/telemetry"
 #define RADAR_TOPIC         "jidai/capital/esp32main/radar/telemetry"
@@ -39,6 +43,13 @@
 #define PHOTORESISTOR_PIN 32  // Фоторезистор (аналогово показує освітленість)
 
 // ------------- CONSTANTS -------------
+
+String currentMelody = "";
+
+bool pendingBleUpdate = false;
+uint8_t targetR = 0, targetG = 0, targetB = 0;
+bool bleEnabled = false;
+NimBLEAddress stripAddress(RGB_MAC, 0);
 
 int currentLedPeriod = 0;
 int ledBlinkTotalLeft = 0;
@@ -62,29 +73,6 @@ WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
 // ------------- SITUABLE FUNCTIONS -------------
-
-void playMelody(JsonArray melodyJsonList) {
-  int numNotes = melodyJsonList.size();
-
-  for (int i = 0; i < numNotes; i++) {
-
-    int note = melodyJsonList[i]["note"].as<int>();
-    int duration = melodyJsonList[i]["duration"].as<int>();
-
-    if (note == 0) {
-      // Якщо в масиві 0 - просто мовчимо (пауза)
-      delay(duration);
-
-    } else {
-      // Граємо ноту!
-      // Формат: tone(ПІН, ЧАСТОТА, ТРИВАЛІСТЬ)
-      tone(BUZZER_PIN, note, duration);
-
-      // Щоб ноти не зливалися в одну кашу, робимо маленьку паузу між ними
-      delay(duration * 1.30);
-    }
-  }
-}
 
 void printScreen(String str) {
   // 1. Будимо екран, якщо він спав
@@ -144,7 +132,10 @@ void printScreen(String str) {
 void reconnect() {
   // Крутимося, поки не підключимось до MQTT
   while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
+    Serial.println("Attempting MQTT connection...");
+    Serial.print("Free RAM: ");
+    Serial.println(ESP.getFreeHeap());
+
     // Create a random client ID
     String clientId = "ESP32Client-";
     clientId += String(random(0xffff), HEX);
@@ -158,16 +149,19 @@ void reconnect() {
                        "{\"status\":\"offline\"}")) {
 
       Serial.println("connected");
+      //printScreen("MQTT: connected!");
       // Відправляємо тестове повідомлення на бекенд
       client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}");
       // Підписуємось на команди від бекенду
-      client.subscribe(DISPLAY_TOPIC);
+      client.subscribe(DISPLAY_TOPIC, 1);
       client.subscribe(BUZZER_TOPIC);
-      client.subscribe(RELAY_TOPIC);
+      client.subscribe(RELAY_TOPIC, 1);
       client.subscribe(LED_TOPIC);
+      client.subscribe(RGB_TOPIC, 1);
 
     } else {
-      delay(5000);
+      //printScreen("MQTT: retrying...");
+      delay(1000);
     }
   }
 }
@@ -197,15 +191,23 @@ void callback(char* topic, byte* payload, unsigned int length) {
     printScreen(doc["message"].as<String>());
 
   } else if (strcmp(topic, BUZZER_TOPIC) == 0) {
-    playMelody(doc["melody"].as<JsonArray>());
+    currentMelody = doc["melody"].as<String>();
+    rtttl::begin(BUZZER_PIN, currentMelody.c_str());
 
   } else if (strcmp(topic, RELAY_TOPIC) == 0) {
-    digitalWrite(RELAY_PIN, doc["mode"].as<bool>());
+    digitalWrite(RELAY_PIN, doc["enable"].as<bool>());
 
   } else if (strcmp(topic, LED_TOPIC) == 0) {
     ledBlinkTotalLeft += doc["times"].as<int>() * 2;
     currentLedPeriod = doc["period"].as<int>() / 2;
 
+  } else if (strcmp(topic, RGB_TOPIC) == 0) {
+    targetR = doc["red"] | targetR;
+    targetG = doc["green"] | targetG;
+    targetB = doc["blue"] | targetB;  
+    bleEnabled = doc["enable"] | bleEnabled;
+    
+    pendingBleUpdate = true;
   }
 }
 
@@ -241,6 +243,68 @@ void setupWifi() {
 
 // ------------- LOOP FUNCTIONS -------------
 
+void bleProcess() {
+  if (pendingBleUpdate) {
+    pendingBleUpdate = false; // Скидаємо прапорець
+    
+    Serial.println("[BLE] Стукаємо до стрічки...");
+    
+    // Створюємо клієнта
+    NimBLEClient* pClient = NimBLEDevice::createClient();
+    
+    // Спробуємо підключитися
+    for (int i = 0; i < 10; i++) {
+      if (pClient->connect(stripAddress, false)) {
+        Serial.println("[BLE] Підключено! Шукаємо сервіс...");
+        
+        // Шукаємо поштову скриньку FFF0
+        NimBLERemoteService* pService = pClient->getService("FFF0");
+        if (pService != nullptr) {
+          
+          // Шукаємо скриньку для команд FFF3
+          NimBLERemoteCharacteristic* pChar = pService->getCharacteristic("FFF3");
+          if (pChar != nullptr) {
+            
+            if (bleEnabled) {
+              // --- РЕЖИМ УВІМКНЕННЯ ---
+              // 1. КОМАНДА "УВІМКНУТИ" (Power ON)
+              uint8_t onPayload[9] = {0x7E, 0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF};
+              pChar->writeValue(onPayload, 9, false);
+              
+              // Даємо китайському чіпу 50 мілісекунд, щоб прокинутись
+              delay(200); 
+              
+              // 2. КОМАНДА "КОЛІР"
+              uint8_t colorPayload[9] = {0x7E, 0x00, 0x05, 0x03, targetR, targetG, targetB, 0x00, 0xEF};
+              pChar->writeValue(colorPayload, 9, false);
+              
+              Serial.println("[BLE] Дуплет відправлено (ON + Color)!");
+            } else {
+              // --- РЕЖИМ ВИМКНЕННЯ ---
+              // КОМАНДА "ВИМКНУТИ" (Power OFF)
+              uint8_t offPayload[9] = {0x7E, 0x00, 0x04, 0x00, 0x00, 0x01, 0xFF, 0x00, 0xEF};
+              pChar->writeValue(offPayload, 9, false);
+              
+              Serial.println("[BLE] Стрічку вимкнено (OFF)!");
+            }
+          }
+        }
+        // Відключаємось, щоб стрічка знову стала доступною для телефона
+        delay(200);
+        pClient->disconnect();
+        break;
+      } else {
+        Serial.print("[BLE] Не вдалося підключитися :(\nСпроба: ");
+        Serial.println(i + 1);
+        delay(150);
+      }
+    }
+    
+    // Звільняємо пам'ять
+    NimBLEDevice::deleteClient(pClient);
+  }
+}
+
 void ledProcess() {
   if (ledBlinkTotalLeft > 0) {
     
@@ -261,8 +325,7 @@ void ledProcess() {
 }
 
 void screenProcess() {
-  // Якщо екран увімкнений І пройшло 5 хвилин (5 * 60 * 1000)
-  if (isScreenOn && (millis() - screenShowingTime > 300000)) {
+  if (isScreenOn && (millis() - screenShowingTime > 60000)) {
     
     display.setPowerSave(1);
     isScreenOn = false;
@@ -306,8 +369,12 @@ void setup() {
   setupWifi();
   client.setServer(mqtt_server, 8883);
   client.setBufferSize(1024);
+  client.setKeepAlive(60);
+  client.setSocketTimeout(60);
   client.setCallback(callback);
   irrecv.enableIRIn();
+  NimBLEDevice::init("");
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(RADAR_PIN, INPUT);
@@ -325,9 +392,13 @@ void loop() {
   if (!client.connected()) {
     reconnect();
   }
-  client.loop();
-  // Важливо! Тримає з'єднання живим
+  client.loop(); // Важливо! Тримає з'єднання живим
+  
+  rtttl::play();
+
   photodiodeProcess();
   radarProcess();
   ledProcess();
+  bleProcess();
+  screenProcess();
 }
