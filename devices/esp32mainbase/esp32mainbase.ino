@@ -151,7 +151,7 @@ void reconnect() {
       Serial.println("connected");
       //printScreen("MQTT: connected!");
       // Відправляємо тестове повідомлення на бекенд
-      client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}");
+      client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}", true);
       // Підписуємось на команди від бекенду
       client.subscribe(DISPLAY_TOPIC, 1);
       client.subscribe(BUZZER_TOPIC);
@@ -344,7 +344,7 @@ void photodiodeProcess() {
   if (millis() - lightLevelTimer > LIGHT_PER) {
     lightLevelTimer = millis();
     float lightLevel = (((float)analogRead(PHOTORESISTOR_PIN)) / 4096) * 100;
-    client.publish(PHOTORESISTOR_TOPIC, ("{\"level\": " + String(lightLevel) + "}").c_str());
+    client.publish(PHOTORESISTOR_TOPIC, ("{\"level\": " + String(lightLevel) + "}").c_str(), true);
   }
 
   if (irrecv.decode(&results)) {
