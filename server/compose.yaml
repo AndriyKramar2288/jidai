@@ -73,6 +73,21 @@ services:
       - ./webapps:/var/lib/jetty/webapps
     restart: unless-stopped
 
+  tgbridge:
+    build: ./tgbridge
+    container_name: telegram-bridge
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      TG_API_ID: ${TG_API_ID}
+      TG_API_HASH: ${TG_API_HASH}
+      TG_SESSION_STRING: ${TG_SESSION_STRING}
+      MQTT_USER: ${MQTT_USER}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+    networks:
+      - app-network
+
 networks:
   app-network:
     driver: bridge
