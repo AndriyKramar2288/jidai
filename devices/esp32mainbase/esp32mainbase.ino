@@ -45,6 +45,7 @@
 // ------------- CONSTANTS -------------
 
 String currentMelody = "";
+bool isBuzzerPlaying = false;
 
 bool pendingBleUpdate = false;
 uint8_t targetR = 0, targetG = 0, targetB = 0;
@@ -144,21 +145,23 @@ void reconnect() {
                        mqtt_server_user,
                        mqtt_server_password,
                        GLOBAL_STATUS_TOPIC,
-                       0,
+                       1,
                        true,  // true означає, що брокер запам'ятає це повідомлення (Retain)
                        "{\"status\":\"offline\"}")) {
 
-      Serial.println("connected");
-      //printScreen("MQTT: connected!");
-      // Відправляємо тестове повідомлення на бекенд
-      client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}", true);
       // Підписуємось на команди від бекенду
       client.subscribe(DISPLAY_TOPIC, 1);
       client.subscribe(BUZZER_TOPIC);
       client.subscribe(RELAY_TOPIC, 1);
       client.subscribe(LED_TOPIC);
       client.subscribe(RGB_TOPIC, 1);
-
+      // Логуємо
+      printScreen("MQTT: connected!");
+      Serial.println("MQTT: connected!");
+      delay(100);
+      client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}", true);
+      client.loop();
+      
     } else {
       //printScreen("MQTT: retrying...");
       delay(1000);
@@ -193,6 +196,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   } else if (strcmp(topic, BUZZER_TOPIC) == 0) {
     currentMelody = doc["melody"].as<String>();
     rtttl::begin(BUZZER_PIN, currentMelody.c_str());
+    isBuzzerPlaying = true;
 
   } else if (strcmp(topic, RELAY_TOPIC) == 0) {
     digitalWrite(RELAY_PIN, doc["enable"].as<bool>());
@@ -242,6 +246,18 @@ void setupWifi() {
 }
 
 // ------------- LOOP FUNCTIONS -------------
+
+void buzzerProcess() {
+  rtttl::play();
+  
+  if (isBuzzerPlaying && !rtttl::isPlaying()) {
+    // Мелодія щойно закінчилась!
+    noTone(BUZZER_PIN);             // Вимикаємо апаратний таймер ШІМ (якщо він завис)
+    pinMode(BUZZER_PIN, OUTPUT);    // На всякий випадок гарантуємо, що це вихід
+    digitalWrite(BUZZER_PIN, LOW);  // Жорстко притискаємо до землі (кляп)
+    isBuzzerPlaying = false;
+  }
+}
 
 void bleProcess() {
   if (pendingBleUpdate) {
@@ -394,8 +410,7 @@ void loop() {
   }
   client.loop(); // Важливо! Тримає з'єднання живим
   
-  rtttl::play();
-
+  buzzerProcess();
   photodiodeProcess();
   radarProcess();
   ledProcess();
