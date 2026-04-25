@@ -89,6 +89,9 @@ services:
       # BROKER
       MQTT_USER: ${MQTT_USER}
       MQTT_PASSWORD: ${MQTT_PASSWORD}
+      # STOPIFY INFO
+      LASTFM_API_KEY: ${LASTFM_API_KEY}
+      LASTFM_USER: ${LASTFM_USER}
     networks:
       - app-network
 
