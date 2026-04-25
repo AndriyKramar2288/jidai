@@ -3,6 +3,13 @@ import asyncio
 import json
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.tl.types import (
+    UserStatusOnline, 
+    UserStatusOffline, 
+    UserStatusRecently, 
+    UserStatusLastWeek, 
+    UserStatusLastMonth
+)
 import paho.mqtt.client as mqtt
 
 # --- ЗМІННІ СЕРЕДОВИЩА ---
@@ -17,11 +24,12 @@ MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "")
 
 TOPIC_IN = "jidai/global/tgbridge/in/telemetry"
 TOPIC_OUT = "jidai/global/tgbridge/out/cmd"
+TOPIC_STATUS = "jidai/global/tgbridge/status/telemetry" 
 
 # --- ІНІЦІАЛІЗАЦІЯ TELEGRAM ---
 client = TelegramClient(StringSession(TG_SESSION_STRING), TG_API_ID, TG_API_HASH)
 
-# Фіксуємо головний асинхронний цикл подій для взаємодії між потоками
+# Фіксуємо головний асинхронний цикл подій
 loop = asyncio.get_event_loop()
 
 # --- ЛОГІКА MQTT ---
@@ -44,14 +52,12 @@ def on_message(mqtt_client, userdata, msg):
             
         print(f"Node-RED -> Telegram (кому: {target}): {text}")
         
-        # Створюємо асинхронну обгортку, яка виконається ТІЛЬКИ в головному потоці
         async def send_task():
             try:
                 await client.send_message(target, text)
             except Exception as e:
                 print(f"Помилка Telethon під час відправки: {e}")
         
-        # Безпечно закидаємо цю задачу в головний loop
         asyncio.run_coroutine_threadsafe(send_task(), loop)
         
     except json.JSONDecodeError:
@@ -67,7 +73,7 @@ mqtt_client.on_message = on_message
 mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
 mqtt_client.loop_start()
 
-# --- ЛОГІКА TELEGRAM ---
+# --- ЛОГІКА TELEGRAM (ВХІДНІ ПОВІДОМЛЕННЯ) ---
 @client.on(events.NewMessage())
 async def forward_to_mqtt(event):
     if event.is_channel and not event.is_group:
@@ -102,15 +108,55 @@ async def forward_to_mqtt(event):
     }
 
     payload_json = json.dumps(payload_dict, ensure_ascii=False)
-    
     mqtt_client.publish(TOPIC_IN, payload_json, qos=1)
     print(f"Telegram -> Node-RED: {payload_json}")
 
+# --- ФОНОВИЙ МОНІТОР СТАТУСУ ---
+async def status_monitor():
+    while True:
+        try:
+            # Отримуємо свій власний профіль
+            me = await client.get_me()
+            status = me.status
+
+            # Базовий шаблон JSON
+            status_data = {
+                "username": me.username,
+                "is_online": False,
+                "status_type": type(status).__name__,
+                "last_seen_ts": None,
+                "expires_ts": None
+            }
+
+            # Аналізуємо тип статусу
+            if isinstance(status, UserStatusOnline):
+                status_data["is_online"] = True
+                if status.expires:
+                    status_data["expires_ts"] = int(status.expires.timestamp() * 1000)
+                    
+            elif isinstance(status, UserStatusOffline):
+                # Коли був востаннє
+                if status.was_online:
+                    status_data["last_seen_ts"] = int(status.was_online.timestamp() * 1000)
+                    
+            # Якщо статус прихований (UserStatusRecently, UserStatusLastWeek тощо),
+            # is_online залишається False, а type передасть Node-RED, що саме приховано.
+
+            payload_json = json.dumps(status_data, ensure_ascii=False)
+            mqtt_client.publish(TOPIC_STATUS, payload_json, qos=1)
+            
+        except Exception as e:
+            print(f"Помилка в моніторі статусу: {e}")
+
+        # Перевіряємо статус кожні 30 секунд
+        await asyncio.sleep(30) 
+
+# --- СТАРТ ---
 async def main():
     print("Бот стартує без консолі...")
     await client.start()
+    loop.create_task(status_monitor())
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    # Використовуємо той самий зафіксований loop
     loop.run_until_complete(main())
