@@ -25,14 +25,19 @@
 
 // TOPICS
 #define GLOBAL_STATUS_TOPIC "jidai/capital/esp32main/global/lwt"
-#define LED_TOPIC           "jidai/capital/esp32main/led/cmd"
-#define DISPLAY_TOPIC       "jidai/capital/esp32main/display/cmd"
-#define BUZZER_TOPIC        "jidai/capital/esp32main/buzzer/cmd"
-#define RELAY_TOPIC         "jidai/capital/esp32main/relay/cmd"
-#define RGB_TOPIC           "jidai/capital/esp32main/rgb/cmd"
 #define PHOTORESISTOR_TOPIC "jidai/capital/esp32main/photoresistor/telemetry"
 #define PHOTOREC_TOPIC      "jidai/capital/esp32main/photorec/telemetry"
 #define RADAR_TOPIC         "jidai/capital/esp32main/radar/telemetry"
+
+#define LED_TOPIC           "jidai/capital/esp32main/led/cmd"
+#define DISPLAY_TOPIC       "jidai/capital/esp32main/display/cmd"
+#define BUZZER_TOPIC        "jidai/capital/esp32main/buzzer/cmd"
+
+#define RELAY_TOPIC         "jidai/capital/esp32main/relay/cmd"
+#define RELAY_TOPIC_STATE   "jidai/capital/esp32main/relay/state"
+#define RGB_TOPIC           "jidai/capital/esp32main/rgb/cmd"
+#define RGB_TOPIC_STATE     "jidai/capital/esp32main/rgb/state"
+
 
 // PINS
 #define LED_PIN 2
@@ -51,6 +56,8 @@ bool pendingBleUpdate = false;
 uint8_t targetR = 0, targetG = 0, targetB = 0;
 bool bleEnabled = false;
 NimBLEAddress stripAddress(RGB_MAC, 0);
+TaskHandle_t bleTaskHandle = NULL;
+volatile bool bleUpdateFinished = false;
 
 int currentLedPeriod = 0;
 int ledBlinkTotalLeft = 0;
@@ -72,6 +79,22 @@ decode_results results;
 
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
+
+// ------------- STATE UPDATE -------------
+
+void relayStateUpdate(bool state) {
+  String payload = "{\"enable\": " + String(state ? "true" : "false") + "}";
+  client.publish(RELAY_TOPIC_STATE, payload.c_str(), true);
+}
+
+void rgbStateUpdate() {
+  String payload = "{\"enable\": " + String(bleEnabled ? "true" : "false") + 
+                   ", \"red\": " + String(targetR) + 
+                   ", \"green\": " + String(targetG) + 
+                   ", \"blue\": " + String(targetB) + "}";
+                   
+  client.publish(RGB_TOPIC_STATE, payload.c_str(), true);
+}
 
 // ------------- SITUABLE FUNCTIONS -------------
 
@@ -159,6 +182,8 @@ void reconnect() {
       printScreen("MQTT: connected!");
       Serial.println("MQTT: connected!");
       delay(100);
+      // Скидуємо стани
+      relayStateUpdate(false);
       client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}", true);
       client.loop();
       
@@ -199,7 +224,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
     isBuzzerPlaying = true;
 
   } else if (strcmp(topic, RELAY_TOPIC) == 0) {
-    digitalWrite(RELAY_PIN, doc["enable"].as<bool>());
+    bool state = doc["enable"].as<bool>();
+    digitalWrite(RELAY_PIN, state);
+    relayStateUpdate(state);
 
   } else if (strcmp(topic, LED_TOPIC) == 0) {
     ledBlinkTotalLeft += doc["times"].as<int>() * 2;
@@ -213,6 +240,55 @@ void callback(char* topic, byte* payload, unsigned int length) {
     
     pendingBleUpdate = true;
   }
+}
+
+// Функція, яка буде крутитися в паралельному потоці
+void bleTaskCode(void * parameter) {
+  Serial.println("[BLE Task] Стукаємо до стрічки на фоні...");
+  
+  NimBLEClient* pClient = NimBLEDevice::createClient();
+  
+  for (int i = 0; i < 10; i++) {
+    if (pClient->connect(stripAddress, false)) {
+      Serial.println("[BLE Task] Підключено! Шукаємо сервіс...");
+      NimBLERemoteService* pService = pClient->getService("FFF0");
+      
+      if (pService != nullptr) {
+        NimBLERemoteCharacteristic* pChar = pService->getCharacteristic("FFF3");
+        if (pChar != nullptr) {
+          if (bleEnabled) {
+            uint8_t onPayload[9] = {0x7E, 0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF};
+            pChar->writeValue(onPayload, 9, false);
+            
+            // Цей delay() заморозить тільки BLE-потік, головний loop() цього навіть не помітить!
+            delay(200); 
+            
+            uint8_t colorPayload[9] = {0x7E, 0x00, 0x05, 0x03, targetR, targetG, targetB, 0x00, 0xEF};
+            pChar->writeValue(colorPayload, 9, false);
+            Serial.println("[BLE Task] Дуплет відправлено!");
+          } else {
+            uint8_t offPayload[9] = {0x7E, 0x00, 0x04, 0x00, 0x00, 0x01, 0xFF, 0x00, 0xEF};
+            pChar->writeValue(offPayload, 9, false);
+            Serial.println("[BLE Task] Стрічку вимкнено!");
+          }
+        }
+      }
+      delay(200);
+      pClient->disconnect();
+      bleUpdateFinished = true; // Оновлюємо статус в MQTT
+      break; // Виходимо з циклу спроб
+      
+    } else {
+      Serial.printf("[BLE Task] Не вдалося :(\nСпроба: %d\n", i + 1);
+      delay(150);
+    }
+  }
+  
+  NimBLEDevice::deleteClient(pClient);
+  
+  // Важливо: потік має вбити сам себе, коли закінчить роботу
+  bleTaskHandle = NULL; 
+  vTaskDelete(NULL); 
 }
 
 void IRAM_ATTR handleRadarInterrupt() {
@@ -261,63 +337,26 @@ void buzzerProcess() {
 
 void bleProcess() {
   if (pendingBleUpdate) {
-    pendingBleUpdate = false; // Скидаємо прапорець
+    pendingBleUpdate = false; 
     
-    Serial.println("[BLE] Стукаємо до стрічки...");
-    
-    // Створюємо клієнта
-    NimBLEClient* pClient = NimBLEDevice::createClient();
-    
-    // Спробуємо підключитися
-    for (int i = 0; i < 10; i++) {
-      if (pClient->connect(stripAddress, false)) {
-        Serial.println("[BLE] Підключено! Шукаємо сервіс...");
-        
-        // Шукаємо поштову скриньку FFF0
-        NimBLERemoteService* pService = pClient->getService("FFF0");
-        if (pService != nullptr) {
-          
-          // Шукаємо скриньку для команд FFF3
-          NimBLERemoteCharacteristic* pChar = pService->getCharacteristic("FFF3");
-          if (pChar != nullptr) {
-            
-            if (bleEnabled) {
-              // --- РЕЖИМ УВІМКНЕННЯ ---
-              // 1. КОМАНДА "УВІМКНУТИ" (Power ON)
-              uint8_t onPayload[9] = {0x7E, 0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF};
-              pChar->writeValue(onPayload, 9, false);
-              
-              // Даємо китайському чіпу 50 мілісекунд, щоб прокинутись
-              delay(200); 
-              
-              // 2. КОМАНДА "КОЛІР"
-              uint8_t colorPayload[9] = {0x7E, 0x00, 0x05, 0x03, targetR, targetG, targetB, 0x00, 0xEF};
-              pChar->writeValue(colorPayload, 9, false);
-              
-              Serial.println("[BLE] Дуплет відправлено (ON + Color)!");
-            } else {
-              // --- РЕЖИМ ВИМКНЕННЯ ---
-              // КОМАНДА "ВИМКНУТИ" (Power OFF)
-              uint8_t offPayload[9] = {0x7E, 0x00, 0x04, 0x00, 0x00, 0x01, 0xFF, 0x00, 0xEF};
-              pChar->writeValue(offPayload, 9, false);
-              
-              Serial.println("[BLE] Стрічку вимкнено (OFF)!");
-            }
-          }
-        }
-        // Відключаємось, щоб стрічка знову стала доступною для телефона
-        delay(200);
-        pClient->disconnect();
-        break;
-      } else {
-        Serial.print("[BLE] Не вдалося підключитися :(\nСпроба: ");
-        Serial.println(i + 1);
-        delay(150);
-      }
+    // Перевіряємо, чи потік вже не крутиться (щоб не наплодити клонів)
+    if (bleTaskHandle == NULL) {
+      xTaskCreate(
+        bleTaskCode,      // Функція, яку треба запустити
+        "BLE_Task",       // Ім'я потоку (для дебагу)
+        5120,             // Розмір пам'яті під потік (BLE жере багатенько)
+        NULL,             // Параметри
+        1,                // Пріоритет (1 - низький, щоб не заважати головному loop)
+        &bleTaskHandle    // Вказівник на потік
+      );
+    } else {
+      Serial.println("[BLE] Попередня команда ще виконується, зачекайте...");
     }
-    
-    // Звільняємо пам'ять
-    NimBLEDevice::deleteClient(pClient);
+  }
+
+  if (bleUpdateFinished) {
+    bleUpdateFinished = false; // Опускаємо прапорець
+    rgbStateUpdate();          // БЕЗПЕЧНО відправляємо статус в MQTT!
   }
 }
 
