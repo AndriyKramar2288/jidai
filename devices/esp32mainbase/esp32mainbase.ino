@@ -161,8 +161,7 @@ void reconnect() {
     Serial.println(ESP.getFreeHeap());
 
     // Create a random client ID
-    String clientId = "ESP32Client-";
-    clientId += String(random(0xffff), HEX);
+    String clientId = "esp32main-Jidai";
 
     if (client.connect(clientId.c_str(),
                        mqtt_server_user,
