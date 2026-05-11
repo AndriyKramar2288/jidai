@@ -1,8 +1,49 @@
 <script setup>
 // Імпортуємо твій розроблюваний компонент
-import Anki from './components/Anki.vue';
+import { ref } from 'vue';
 import Abobus from './components/Greetings.vue'
 import Protocols from './components/Protocols.vue';
+import AnkiOld from './components/AnkiOld.vue';
+import Anki from './components/Anki.vue';
+const msg = ref({
+  payload: {
+    theme: {
+        rgb_hex: "#FF0000",
+        text: "FFFFFF"
+    },
+    mimi: {
+      "header": "wqeqewqe",
+      "text": "weqeww"
+    },
+    anki: {
+      "totalNew": 15,
+      "totalDue": 42,
+      "totalRemaining": 57,
+      "decks": [
+              {
+              "name": "🇯🇵 Японська: N4 Всі слова",
+              "new": 10,
+              "due": 25
+              },
+              {
+              "name": "🇬🇧 Англійська: IT терміни (B1)",
+              "new": 5,
+              "due": 12
+              },
+              {
+              "name": "☕ Java: Патерни (SOLID, GRASP)",
+              "new": 0,
+              "due": 5
+              },
+              {
+              "name": "🎸 Музична теорія та ноти",
+              "new": 0,
+              "due": 0
+              }
+          ]
+      }
+  }
+})
 </script>
 
 <template>
@@ -34,9 +75,10 @@ import Protocols from './components/Protocols.vue';
                   "
                 >
                   <!-- ТВІЙ КОМПОНЕНТ -->
-                  <Anki />
-                  <Abobus />
-                  <Protocols />
+                  <AnkiOld :msg="msg" />
+                  <Abobus :msg="msg" />
+                  <Protocols :msg="msg" />
+                  <Anki :msg="msg" />
                 </div>
 
               </div>

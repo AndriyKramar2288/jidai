@@ -17,6 +17,9 @@
 #include <ArduinoJson.h>
 #include <NonBlockingRtttl.h>
 
+// SHT20
+#include <DFRobot_SHT20.h>
+
 // ------------- CUSTOMABLE -------------
 
 #define SCREEN_WIDTH 128  // Ширина екрану в пікселях
@@ -28,6 +31,7 @@
 #define PHOTORESISTOR_TOPIC "jidai/capital/esp32main/photoresistor/telemetry"
 #define PHOTOREC_TOPIC      "jidai/capital/esp32main/photorec/telemetry"
 #define RADAR_TOPIC         "jidai/capital/esp32main/radar/telemetry"
+#define SHT20_TOPIC         "jidai/capital/esp32main/sht20/telemetry"
 
 #define LED_TOPIC           "jidai/capital/esp32main/led/cmd"
 #define DISPLAY_TOPIC       "jidai/capital/esp32main/display/cmd"
@@ -70,6 +74,10 @@ volatile bool radarTriggered = false;
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 unsigned long screenShowingTime = 0;
 bool isScreenOn = true;
+
+DFRobot_SHT20 sht20;
+#define SHT20_PER 10000
+unsigned long sht20Timer = 0;
 
 #define LIGHT_PER 10000
 unsigned long lightLevelTimer = 0;
@@ -322,6 +330,20 @@ void setupWifi() {
 
 // ------------- LOOP FUNCTIONS -------------
 
+void sht20Process() {
+  if (millis() - sht20Timer > SHT20_PER) {
+    sht20Timer = millis();
+    
+    float temp = sht20.readTemperature();
+    float hum = sht20.readHumidity();
+
+    String payload = "{\"temperature\": " + String(temp, 1) + 
+                     ", \"humidity\": " + String(hum, 1) + "}";
+                     
+    client.publish(SHT20_TOPIC, payload.c_str(), true);
+  }
+}
+
 void buzzerProcess() {
   rtttl::play();
   
@@ -419,14 +441,22 @@ void photodiodeProcess() {
 
 void setup() {
   Serial.begin(115200);
+  
   setupScreen();
+
+  sht20.initSHT20();
+  delay(100);
+  sht20.checkSHT20();
+
   setupWifi();
   client.setServer(mqtt_server, 8883);
   client.setBufferSize(1024);
   client.setKeepAlive(60);
   client.setSocketTimeout(60);
   client.setCallback(callback);
+
   irrecv.enableIRIn();
+
   NimBLEDevice::init("");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
@@ -454,4 +484,5 @@ void loop() {
   ledProcess();
   bleProcess();
   screenProcess();
+  sht20Process();
 }

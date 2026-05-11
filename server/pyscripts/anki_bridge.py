@@ -115,14 +115,14 @@ async def anki_scraper_task(mqtt_client):
             payload_json = json.dumps(stats, ensure_ascii=False)
             
             if mqtt_client:
-                mqtt_client.publish(TOPIC_ANKI_STATS, payload_json, qos=1)
+                mqtt_client.publish(TOPIC_ANKI_STATS, payload_json, qos=1, retain=True)
                 print(f"[Anki] Статистика успішно відправлена: Залишилось {stats['totalRemaining']} карток!")
             
         except Exception as e:
             print(f"\n[Anki ERROR] {e}")
             traceback.print_exc()
 
-        await asyncio.sleep(1800) # Раз на 30 хв
+        await asyncio.sleep(600) # Раз на 10 хв
 
 async def start_anki(mqtt_client_ref):
     await anki_scraper_task(mqtt_client_ref)
