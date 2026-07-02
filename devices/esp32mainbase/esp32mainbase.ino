@@ -1,10 +1,10 @@
 #include "secrets.h"
 
-// WIFI / MQTT / Bluetooth
-#include <WiFi.h>
-#include <PubSubClient.h>
-#include <WiFiClientSecure.h>
-#include <NimBLEDevice.h>
+// BLUETOOTH (Dual Mode)
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEClient.h>
+#include "BluetoothSerial.h"
 
 // PHOTODIODE
 #include <IRrecv.h>
@@ -22,46 +22,58 @@
 
 // ------------- CUSTOMABLE -------------
 
-#define SCREEN_WIDTH 128  // Ширина екрану в пікселях
-#define SCREEN_HEIGHT 64  // Висота екрану в пікселях
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
 #define RGB_MAC "BE:27:FA:00:11:6C"
 
+// ПІНИ ДЛЯ ESP-01 МОСТА
+#define ESP01_RX_PIN 27
+#define ESP01_TX_PIN 26
+
 // TOPICS
-#define GLOBAL_STATUS_TOPIC "jidai/capital/esp32main/global/lwt"
-#define PHOTORESISTOR_TOPIC "jidai/capital/esp32main/photoresistor/telemetry"
-#define PHOTOREC_TOPIC      "jidai/capital/esp32main/photorec/telemetry"
-#define RADAR_TOPIC         "jidai/capital/esp32main/radar/telemetry"
-#define SHT20_TOPIC         "jidai/capital/esp32main/sht20/telemetry"
+#define GLOBAL_STATUS_TOPIC  "jidai/capital/esp32main/global/lwt"
+#define PHOTORESISTOR_TOPIC  "jidai/capital/esp32main/photoresistor/telemetry"
+#define PHOTOREC_TOPIC       "jidai/capital/esp32main/photorec/telemetry"
+#define RADAR_TOPIC          "jidai/capital/esp32main/radar/telemetry"
+#define SHT20_TOPIC          "jidai/capital/esp32main/sht20/telemetry"
 
-#define LED_TOPIC           "jidai/capital/esp32main/led/cmd"
-#define DISPLAY_TOPIC       "jidai/capital/esp32main/display/cmd"
-#define BUZZER_TOPIC        "jidai/capital/esp32main/buzzer/cmd"
+#define LED_TOPIC            "jidai/capital/esp32main/led/cmd"
+#define DISPLAY_TOPIC        "jidai/capital/esp32main/display/cmd"
+#define BUZZER_TOPIC         "jidai/capital/esp32main/buzzer/cmd"
 
-#define RELAY_TOPIC         "jidai/capital/esp32main/relay/cmd"
-#define RELAY_TOPIC_STATE   "jidai/capital/esp32main/relay/state"
-#define RGB_TOPIC           "jidai/capital/esp32main/rgb/cmd"
-#define RGB_TOPIC_STATE     "jidai/capital/esp32main/rgb/state"
-
+#define RELAY_TOPIC          "jidai/capital/esp32main/relay/cmd"
+#define RELAY_TOPIC_STATE    "jidai/capital/esp32main/relay/state"
+#define RGB_TOPIC            "jidai/capital/esp32main/rgb/cmd"
+#define RGB_TOPIC_STATE      "jidai/capital/esp32main/rgb/state"
+#define CWQRP_TOPIC          "jidai/capital/esp32main/cwqrp/cmd"
 
 // PINS
 #define LED_PIN 2
 #define RADAR_PIN 19
 #define RELAY_PIN 23
-#define BUZZER_PIN 5           // буззер пердунчик маленький мімімі
-#define K_RECV_PIN 18          // Пін, куди підключено DAT/OUT приймача, от-той фотодіод для пультика
-#define PHOTORESISTOR_PIN 32  // Фоторезистор (аналогово показує освітленість)
+#define BUZZER_PIN 5
+#define K_RECV_PIN 18
+#define PHOTORESISTOR_PIN 32
 
 // ------------- CONSTANTS -------------
 
 String currentMelody = "";
 bool isBuzzerPlaying = false;
 
+// Змінні для BLE (RGB стрічка)
 bool pendingBleUpdate = false;
 uint8_t targetR = 0, targetG = 0, targetB = 0;
 bool bleEnabled = false;
-NimBLEAddress stripAddress(RGB_MAC, 0);
+BLEAddress stripAddress(RGB_MAC);
 TaskHandle_t bleTaskHandle = NULL;
 volatile bool bleUpdateFinished = false;
+
+// Змінні для Bluetooth Classic (CWQRP міст -> HC-06)
+BluetoothSerial SerialBT;
+uint8_t cwqrpMac[6] = {0x00, 0x22, 0x09, 0x02, 0x74, 0xC3};
+bool pendingBtcUpdate = false;
+TaskHandle_t btcTaskHandle = NULL;
+String btcPayloadQueue = "";
 
 int currentLedPeriod = 0;
 int ledBlinkTotalLeft = 0;
@@ -70,7 +82,6 @@ bool isLedActive = false;
 
 volatile bool radarTriggered = false;
 
-// Створюємо об'єкт дисплея (вказуємо ширину, висоту, шину I2C і пін скидання (-1 означає, що його немає))
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 unsigned long screenShowingTime = 0;
 bool isScreenOn = true;
@@ -85,131 +96,78 @@ unsigned long lightLevelTimer = 0;
 IRrecv irrecv(K_RECV_PIN);
 decode_results results;
 
-WiFiClientSecure espClient;
-PubSubClient client(espClient);
+// ------------- UART BRIDGE HELPER -------------
+
+// Єдина функція для відправки даних на ESP-01 з логуванням
+bool isBridgeReady = false;
+
+void sendToBridge(String message, bool force = false) {
+  if (!isBridgeReady && !force) return;
+  
+  Serial2.println(message);
+  Serial.println("[UART TX] " + message);
+}
 
 // ------------- STATE UPDATE -------------
 
 void relayStateUpdate(bool state) {
   String payload = "{\"enable\": " + String(state ? "true" : "false") + "}";
-  client.publish(RELAY_TOPIC_STATE, payload.c_str(), true);
+  sendToBridge("PUB|" + String(RELAY_TOPIC_STATE) + "|" + payload);
 }
 
 void rgbStateUpdate() {
-  String payload = "{\"enable\": " + String(bleEnabled ? "true" : "false") + 
-                   ", \"red\": " + String(targetR) + 
-                   ", \"green\": " + String(targetG) + 
+  String payload = "{\"enable\": " + String(bleEnabled ? "true" : "false") +
+                   ", \"red\": " + String(targetR) +
+                   ", \"green\": " + String(targetG) +
                    ", \"blue\": " + String(targetB) + "}";
-                   
-  client.publish(RGB_TOPIC_STATE, payload.c_str(), true);
+  sendToBridge("PUB|" + String(RGB_TOPIC_STATE) + "|" + payload);
 }
 
 // ------------- SITUABLE FUNCTIONS -------------
 
 void printScreen(String str) {
-  // 1. Будимо екран, якщо він спав
   if (!isScreenOn) {
     display.setPowerSave(0);
     isScreenOn = true;
   }
-  
-  display.clearBuffer();  
-  
-  // 2. Налаштування шрифту та геометрії
-  int lineHeight = 13; // Висота твого шрифту u8g2_font_6x13
-  int y = 13;          // Координата Y для першого рядка (в U8g2 це базова лінія знизу букв)
+
+  display.clearBuffer();
+  int lineHeight = 13;
+  int y = 13;
   String currentLine = "";
-  
-  // 3. Алгоритм розбиття тексту на слова і автопереносу
+
   int i = 0;
   while (i < str.length()) {
-    // Шукаємо найближчий пробіл
     int spaceIndex = str.indexOf(' ', i);
     if (spaceIndex == -1) {
-      spaceIndex = str.length(); // Якщо пробілів більше немає, беремо до кінця
+      spaceIndex = str.length();
     }
-    
-    // Вирізаємо слово
+
     String word = str.substring(i, spaceIndex);
-    
-    // Формуємо тестовий рядок і міряємо його фізичну ширину в пікселях!
     String testLine = currentLine + word + " ";
     int lineWidth = display.getUTF8Width(testLine.c_str());
-    
-    // Якщо ширина більша за екран (і ми вже хоч щось додали в цей рядок)
+
     if (lineWidth > SCREEN_WIDTH && currentLine.length() > 0) {
-      // Друкуємо те, що влізло
       display.setCursor(0, y);
       display.print(currentLine);
-      
-      // Переходимо на новий рядок
       y += lineHeight;
-      currentLine = word + " "; // Починаємо новий рядок з поточного слова
+      currentLine = word + " ";
     } else {
-      // Якщо влазить — просто додаємо слово до рядка
       currentLine = testLine;
     }
-    
-    i = spaceIndex + 1; // Пересуваємось до наступного слова
+    i = spaceIndex + 1;
   }
-  
-  // 4. Друкуємо останній рядок (хвіст), який залишився в пам'яті
+
   display.setCursor(0, y);
   display.print(currentLine);
-  
   display.sendBuffer();
-  screenShowingTime = millis(); 
+  screenShowingTime = millis();
 }
 
-void reconnect() {
-  // Крутимося, поки не підключимось до MQTT
-  while (!client.connected()) {
-    Serial.println("Attempting MQTT connection...");
-    Serial.print("Free RAM: ");
-    Serial.println(ESP.getFreeHeap());
-
-    // Create a random client ID
-    String clientId = "esp32main-Jidai";
-
-    if (client.connect(clientId.c_str(),
-                       mqtt_server_user,
-                       mqtt_server_password,
-                       GLOBAL_STATUS_TOPIC,
-                       1,
-                       true,  // true означає, що брокер запам'ятає це повідомлення (Retain)
-                       "{\"status\":\"offline\"}")) {
-
-      // Підписуємось на команди від бекенду
-      client.subscribe(DISPLAY_TOPIC, 1);
-      client.subscribe(BUZZER_TOPIC);
-      client.subscribe(RELAY_TOPIC, 1);
-      client.subscribe(LED_TOPIC);
-      client.subscribe(RGB_TOPIC, 1);
-      // Логуємо
-      printScreen("MQTT: connected!");
-      Serial.println("MQTT: connected!");
-      delay(100);
-      // Скидуємо стани
-      relayStateUpdate(false);
-      client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}", true);
-      client.loop();
-      
-    } else {
-      //printScreen("MQTT: retrying...");
-      delay(1000);
-    }
-  }
-}
-
-// Функція, яка викликається, коли прилітає повідомлення
-void callback(char* topic, byte* payload, unsigned int length) {
+// Функція обробки вхідних повідомлень
+void processMqttMessage(String topic, String message) {
   Serial.print("Прилетіло в топік: ");
   Serial.println(topic);
-
-  String message = "";
-  for (int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
 
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, message);
@@ -217,60 +175,86 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if (error) {
     Serial.print("Братан, це не JSON! Помилка: ");
     Serial.println(error.c_str());
-    return;  // Виходимо з функції, щоб не крашнути плату
+    return;
   }
 
-  // 1. РОБИМО EQUALS ДЛЯ ТОПІКА (strcmp повертає 0, якщо рядки однакові)
-  if (strcmp(topic, DISPLAY_TOPIC) == 0) {
-
+  if (topic == DISPLAY_TOPIC) {
     printScreen(doc["message"].as<String>());
 
-  } else if (strcmp(topic, BUZZER_TOPIC) == 0) {
+  } else if (topic == BUZZER_TOPIC) {
     currentMelody = doc["melody"].as<String>();
     rtttl::begin(BUZZER_PIN, currentMelody.c_str());
     isBuzzerPlaying = true;
 
-  } else if (strcmp(topic, RELAY_TOPIC) == 0) {
+  } else if (topic == RELAY_TOPIC) {
     bool state = doc["enable"].as<bool>();
     digitalWrite(RELAY_PIN, state);
     relayStateUpdate(state);
 
-  } else if (strcmp(topic, LED_TOPIC) == 0) {
+  } else if (topic == LED_TOPIC) {
     ledBlinkTotalLeft += doc["times"].as<int>() * 2;
     currentLedPeriod = doc["period"].as<int>() / 2;
 
-  } else if (strcmp(topic, RGB_TOPIC) == 0) {
+  } else if (topic == RGB_TOPIC) {
     targetR = doc["red"] | targetR;
     targetG = doc["green"] | targetG;
-    targetB = doc["blue"] | targetB;  
+    targetB = doc["blue"] | targetB;
     bleEnabled = doc["enable"] | bleEnabled;
-    
     pendingBleUpdate = true;
+
+  } else if (topic == CWQRP_TOPIC) {
+    btcPayloadQueue = "";
+
+    if (doc.containsKey("icons")) {
+      JsonArray icons = doc["icons"];
+      for (int i = 0; i < icons.size() && i < 8; i++) {
+        btcPayloadQueue += "I:" + String(i) + ":";
+        JsonArray iconBytes = icons[i];
+        for (int j = 0; j < iconBytes.size() && j < 8; j++) {
+          int b = iconBytes[j].as<int>();
+          if (b < 16) btcPayloadQueue += "0";
+          btcPayloadQueue += String(b, HEX);
+        }
+        btcPayloadQueue += "\n";
+      }
+    }
+
+    if (doc.containsKey("strings")) {
+      JsonArray strings = doc["strings"];
+      for (int i = 0; i < strings.size(); i++) {
+        String s = strings[i].as<String>();
+        for (int b = 1; b < 8; b++) {
+          s.replace(String((char)b), "~" + String(b));
+        }
+        btcPayloadQueue += "S:" + String(i) + ":" + s + "\n";
+      }
+      btcPayloadQueue += "R:" + String(strings.size()) + "\n";
+    }
+
+    if (btcPayloadQueue.length() > 0) {
+      pendingBtcUpdate = true;
+    }
   }
 }
 
-// Функція, яка буде крутитися в паралельному потоці
+// ------------- TASKS -------------
+
 void bleTaskCode(void * parameter) {
   Serial.println("[BLE Task] Стукаємо до стрічки на фоні...");
-  
-  NimBLEClient* pClient = NimBLEDevice::createClient();
-  
-  for (int i = 0; i < 10; i++) {
-    if (pClient->connect(stripAddress, false)) {
+  BLEClient* pClient = BLEDevice::createClient();
+
+  for (int attempt = 0; attempt < 10; attempt++) {
+    if (pClient->connect(stripAddress)) {
       Serial.println("[BLE Task] Підключено! Шукаємо сервіс...");
-      NimBLERemoteService* pService = pClient->getService("FFF0");
-      
+      BLERemoteService* pService = pClient->getService(BLEUUID((uint16_t)0xFFF0));
       if (pService != nullptr) {
-        NimBLERemoteCharacteristic* pChar = pService->getCharacteristic("FFF3");
+        BLERemoteCharacteristic* pChar = pService->getCharacteristic(BLEUUID((uint16_t)0xFFF3));
         if (pChar != nullptr) {
           if (bleEnabled) {
-            uint8_t onPayload[9] = {0x7E, 0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF};
-            pChar->writeValue(onPayload, 9, false);
-            
-            // Цей delay() заморозить тільки BLE-потік, головний loop() цього навіть не помітить!
-            delay(200); 
-            
+            uint8_t onPayload[9]    = {0x7E, 0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF};
             uint8_t colorPayload[9] = {0x7E, 0x00, 0x05, 0x03, targetR, targetG, targetB, 0x00, 0xEF};
+            pChar->writeValue(onPayload, 9, false);
+            delay(200);
             pChar->writeValue(colorPayload, 9, false);
             Serial.println("[BLE Task] Дуплет відправлено!");
           } else {
@@ -282,116 +266,169 @@ void bleTaskCode(void * parameter) {
       }
       delay(200);
       pClient->disconnect();
-      bleUpdateFinished = true; // Оновлюємо статус в MQTT
-      break; // Виходимо з циклу спроб
-      
+      bleUpdateFinished = true;
+      break;
+
     } else {
-      Serial.printf("[BLE Task] Не вдалося :(\nСпроба: %d\n", i + 1);
-      delay(150);
+      Serial.printf("[BLE Task] Не вдалося :(\nСпроба: %d\n", attempt + 1);
+      delay(200);
     }
   }
+  delete pClient;
+  bleTaskHandle = NULL;
+  vTaskDelete(NULL);
+}
+
+void btcTaskCode(void * parameter) {
+  Serial.println("[BTC Task] Підключаємось до HC-06...");
+  bool connected = SerialBT.connect(cwqrpMac);
+
+  if (connected) {
+    SerialBT.println();
+    delay(70);
+    Serial.println("[BTC Task] З'єднано! Починаємо відправку по рядках...");
+    
+    // Парсимо нашу велику чергу по рядках і відправляємо з паузами
+    int startIndex = 0;
+    while (startIndex < btcPayloadQueue.length()) {
+      int endIndex = btcPayloadQueue.indexOf('\n', startIndex);
+      
+      // Якщо \n більше немає, беремо залишок до кінця рядка
+      if (endIndex == -1) {
+        endIndex = btcPayloadQueue.length();
+      }
+
+      // Вирізаємо один рядок (без \n)
+      String singleCommand = btcPayloadQueue.substring(startIndex, endIndex);
+      
+      if (singleCommand.length() > 0) {
+        SerialBT.println(singleCommand); // println сам додасть \n
+        Serial.println("[BTC TX]: " + singleCommand);
+        
+        // КРИТИЧНИЙ МОМЕНТ: Пауза, щоб буфер Arduino Uno встиг переварити команду
+        delay(70); 
+      }
+
+      // Зсуваємо індекс для наступного проходу
+      startIndex = endIndex + 1;
+    }
+
+    // Даємо HC-06 час виплюнути останні байти в Ардуїну перед відключенням
+    delay(200); 
+    SerialBT.disconnect();
+    Serial.println("[BTC Task] Відправлено успішно, відключились.");
+  } else {
+    Serial.println("[BTC Task] HC-06 не знайдено (Ардуїна вимкнена?).");
+  }
   
-  NimBLEDevice::deleteClient(pClient);
-  
-  // Важливо: потік має вбити сам себе, коли закінчить роботу
-  bleTaskHandle = NULL; 
-  vTaskDelete(NULL); 
+  btcTaskHandle = NULL;
+  vTaskDelete(NULL);
 }
 
 void IRAM_ATTR handleRadarInterrupt() {
   radarTriggered = true;
 }
 
-// ------------- SETUP FUNCTIONS -------------
-
-void setupScreen() {
-  display.begin();
-  display.enableUTF8Print(); // ВМИКАЄМО МАГІЮ КИРИЛИЦІ!
-  
-  // Вибираємо кириличний шрифт (їх там багато різних розмірів)
-  display.setFont(u8g2_font_6x13_t_cyrillic); 
-  
-  display.clearBuffer();
-  display.setCursor(0, 10);
-  display.print("Jidai MAIN BOOTING...");
-  display.sendBuffer();
-}
-
-void setupWifi() {
-  delay(10);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi Connected!");
-  espClient.setInsecure();
-}
-
 // ------------- LOOP FUNCTIONS -------------
+
+// Функція, яка слухає ESP-01
+void bridgeProcess() {
+  if (Serial2.available()) {
+    String data = Serial2.readStringUntil('\n');
+    data.trim();
+
+    // 1. ЛОГУЄМО ВСЕ, ЩО ПРИЛІТАЄ
+    if (data.length() > 0) {
+      Serial.println("[UART RX] " + data);
+    }
+
+    // 2. ОБРОБЛЯЄМО СИСТЕМНІ ПОВІДОМЛЕННЯ
+    if (data == "SYS|REQ_INIT") {
+      String initStr = "INIT|" + String(ssid) + "|" + String(password) + "|" + 
+                       String(mqtt_server) + "|" + String(mqtt_server_user) + "|" + 
+                       String(mqtt_server_password) + "|jidai/capital/esp32main/+/cmd";
+      
+      isBridgeReady = true;
+      sendToBridge(initStr); // Відправляємо з логуванням
+      printScreen("NET: Sending Config...");
+    } 
+    else if (data == "SYS|WIFI_OK") {
+      printScreen("NET: WiFi OK");
+    }
+    else if (data == "SYS|MQTT_OK") {
+      printScreen("NET: MQTT Connected!");
+      // Публікуємо статус онлайн
+      sendToBridge("PUB|" + String(GLOBAL_STATUS_TOPIC) + "|{\"status\":\"online\"}");
+      relayStateUpdate(false);
+    }
+    // 3. ОБРОБЛЯЄМО КОМАНДИ З ІНТЕРНЕТУ
+    else if (data.startsWith("MSG|")) {
+      int firstPipe = data.indexOf('|');
+      int secondPipe = data.indexOf('|', firstPipe + 1);
+      
+      if (firstPipe > 0 && secondPipe > 0) {
+        String topic = data.substring(firstPipe + 1, secondPipe);
+        String payload = data.substring(secondPipe + 1);
+        processMqttMessage(topic, payload);
+      }
+    }
+  }
+}
 
 void sht20Process() {
   if (millis() - sht20Timer > SHT20_PER) {
     sht20Timer = millis();
-    
     float temp = sht20.readTemperature();
     float hum = sht20.readHumidity();
-
-    String payload = "{\"temperature\": " + String(temp, 1) + 
+    String payload = "{\"temperature\": " + String(temp, 1) +
                      ", \"humidity\": " + String(hum, 1) + "}";
-                     
-    client.publish(SHT20_TOPIC, payload.c_str(), true);
+    sendToBridge("PUB|" + String(SHT20_TOPIC) + "|" + payload);
   }
 }
 
 void buzzerProcess() {
   rtttl::play();
-  
   if (isBuzzerPlaying && !rtttl::isPlaying()) {
-    // Мелодія щойно закінчилась!
-    noTone(BUZZER_PIN);             // Вимикаємо апаратний таймер ШІМ (якщо він завис)
-    pinMode(BUZZER_PIN, OUTPUT);    // На всякий випадок гарантуємо, що це вихід
-    digitalWrite(BUZZER_PIN, LOW);  // Жорстко притискаємо до землі (кляп)
+    noTone(BUZZER_PIN);
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
     isBuzzerPlaying = false;
   }
 }
 
 void bleProcess() {
   if (pendingBleUpdate) {
-    pendingBleUpdate = false; 
-    
-    // Перевіряємо, чи потік вже не крутиться (щоб не наплодити клонів)
-    if (bleTaskHandle == NULL) {
-      xTaskCreate(
-        bleTaskCode,      // Функція, яку треба запустити
-        "BLE_Task",       // Ім'я потоку (для дебагу)
-        5120,             // Розмір пам'яті під потік (BLE жере багатенько)
-        NULL,             // Параметри
-        1,                // Пріоритет (1 - низький, щоб не заважати головному loop)
-        &bleTaskHandle    // Вказівник на потік
-      );
+    pendingBleUpdate = false;
+    if (bleTaskHandle == NULL && btcTaskHandle == NULL) {
+      xTaskCreate(bleTaskCode, "BLE_Task", 8192, NULL, 1, &bleTaskHandle);
     } else {
-      Serial.println("[BLE] Попередня команда ще виконується, зачекайте...");
+      pendingBleUpdate = true; 
     }
   }
-
   if (bleUpdateFinished) {
-    bleUpdateFinished = false; // Опускаємо прапорець
-    rgbStateUpdate();          // БЕЗПЕЧНО відправляємо статус в MQTT!
+    bleUpdateFinished = false;
+    rgbStateUpdate();
+  }
+}
+
+void btcProcess() {
+  if (pendingBtcUpdate) {
+    pendingBtcUpdate = false;
+    if (btcTaskHandle == NULL && bleTaskHandle == NULL) {
+      xTaskCreate(btcTaskCode, "BTC_Task", 8192, NULL, 1, &btcTaskHandle);
+    } else {
+      pendingBtcUpdate = true; 
+    }
   }
 }
 
 void ledProcess() {
   if (ledBlinkTotalLeft > 0) {
-    
     if (millis() - lastLedBlinkTime >= currentLedPeriod) {
       lastLedBlinkTime = millis();
-      
       isLedActive = !isLedActive;
       digitalWrite(LED_PIN, isLedActive);
-      
       ledBlinkTotalLeft--;
-      
       if (ledBlinkTotalLeft == 0) {
         isLedActive = false;
         digitalWrite(LED_PIN, LOW);
@@ -402,7 +439,6 @@ void ledProcess() {
 
 void screenProcess() {
   if (isScreenOn && (millis() - screenShowingTime > 60000)) {
-    
     display.setPowerSave(1);
     isScreenOn = false;
   }
@@ -411,54 +447,61 @@ void screenProcess() {
 void radarProcess() {
   if (radarTriggered) {
     radarTriggered = false;
-    client.publish(RADAR_TOPIC, ("{\"active\": " + String(digitalRead(RADAR_PIN)) + "}").c_str());
+    String payload = "{\"active\": " + String(digitalRead(RADAR_PIN)) + "}";
+    sendToBridge("PUB|" + String(RADAR_TOPIC) + "|" + payload);
   }
 }
 
 void photodiodeProcess() {
-
   if (millis() - lightLevelTimer > LIGHT_PER) {
     lightLevelTimer = millis();
     float lightLevel = (((float)analogRead(PHOTORESISTOR_PIN)) / 4096) * 100;
-    client.publish(PHOTORESISTOR_TOPIC, ("{\"level\": " + String(lightLevel) + "}").c_str(), true);
+    String payload = "{\"level\": " + String(lightLevel) + "}";
+    sendToBridge("PUB|" + String(PHOTORESISTOR_TOPIC) + "|" + payload);
   }
 
   if (irrecv.decode(&results)) {
-    // Друкуємо код кнопки у форматі HEX
     String hexCode = String((uint32_t)results.value, HEX);
-    client.publish(PHOTOREC_TOPIC, ("{\"hex_code\": \"" + hexCode + "\"}").c_str());
-
-    Serial.print("Зловлено код: 0x");
+    String payload = "{\"hex_code\": \"" + hexCode + "\"}";
+    sendToBridge("PUB|" + String(PHOTOREC_TOPIC) + "|" + payload);
+    
+    Serial.print("Зловлено ІЧ код: 0x");
     serialPrintUint64(results.value, HEX);
     Serial.println();
-
-    // Перезапускаємо приймач для наступної кнопки
     irrecv.resume();
   }
 }
 
-// ------------- CORE -------------
+// ------------- SETUP -------------
+
+void setupScreen() {
+  display.begin();
+  display.enableUTF8Print();
+  display.setFont(u8g2_font_6x13_t_cyrillic);
+  display.clearBuffer();
+  display.setCursor(0, 10);
+  display.print("Jidai MAIN BOOTING...");
+  display.sendBuffer();
+}
 
 void setup() {
   Serial.begin(115200);
   
+  // ЗАПУСКАЄМО МІСТ ДО ESP-01
+  Serial2.begin(115200, SERIAL_8N1, ESP01_RX_PIN, ESP01_TX_PIN);
+
   setupScreen();
 
   sht20.initSHT20();
   delay(100);
   sht20.checkSHT20();
 
-  setupWifi();
-  client.setServer(mqtt_server, 8883);
-  client.setBufferSize(1024);
-  client.setKeepAlive(60);
-  client.setSocketTimeout(60);
-  client.setCallback(callback);
-
   irrecv.enableIRIn();
 
-  NimBLEDevice::init("");
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  BLEDevice::init("");
+  SerialBT.begin("ESP32_Jidai_Master", true); 
+  SerialBT.setPin("1234", 4); // Пароль для HC-06
+  Serial.println("Bluetooth stacks initialized!");
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(RADAR_PIN, INPUT);
@@ -469,20 +512,20 @@ void setup() {
   digitalWrite(RELAY_PIN, LOW);
   digitalWrite(LED_PIN, LOW);
 
-  printScreen("Successfuly started!");
+  printScreen("Hardware ready!");
+  Serial.println("Waiting for ESP-01 to request config...");
 }
 
+// ------------- CORE LOOP -------------
+
 void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop(); // Важливо! Тримає з'єднання живим
-  
-  buzzerProcess();
-  photodiodeProcess();
-  radarProcess();
-  ledProcess();
-  bleProcess();
-  screenProcess();
-  sht20Process();
+  bridgeProcess();     // Слухаємо ESP-01 та парсимо команди
+  buzzerProcess();     // Крутимо музику
+  photodiodeProcess(); // Слухаємо світло та ІЧ-пульт
+  radarProcess();      // Перевіряємо рух
+  ledProcess();        // Блимаємо діодом
+  bleProcess();        // Керуємо стрічкою
+  btcProcess();        // Кидаємо дані на екран
+  screenProcess();     // Вимикаємо дисплей за таймером
+  sht20Process();      // Міряємо температуру
 }

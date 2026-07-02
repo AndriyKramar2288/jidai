@@ -6,7 +6,7 @@ services:
     ports:
       - "80:80"       # HTTP
       - "443:443"     # HTTPS
-      - "8883:8883"   # MQTTS (захищений MQTT для залізяк)
+      - "8883:8883"   # MQTTS (Сертифікати)
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
@@ -36,13 +36,11 @@ services:
     image: nodered/node-red:latest
     container_name: nodered-server
     restart: unless-stopped
-    user: "1000" # Запускаємо з правами звичайного юзера для безпеки
+    user: "1000"
     environment:
-      # Прокидаємо наші змінні всередину контейнера
       - NODERED_USER=${NODERED_USER}
       - NODERED_PASSWORD_HASH=${NODERED_PASSWORD_HASH}
     volumes:
-      # Магія тут: накладаємо наш локальний конфіг поверх системного
       - ./nodered/settings.js:/data/settings.js:ro
       - nodered_data:/data
     networks:
@@ -80,16 +78,12 @@ services:
     depends_on:
       - mosquitto
     environment:
-      # TELEGRAM BRIDGE
       TG_API_ID: ${TG_API_ID}
       TG_API_HASH: ${TG_API_HASH}
       TG_SESSION_STRING: ${TG_SESSION_STRING}
-      # ANKI BRIDGE
       ANKI_COOKIE: ${ANKI_COOKIE}
-      # BROKER
       MQTT_USER: ${MQTT_USER}
       MQTT_PASSWORD: ${MQTT_PASSWORD}
-      # STOPIFY INFO
       LASTFM_API_KEY: ${LASTFM_API_KEY}
       LASTFM_USER: ${LASTFM_USER}
     networks:

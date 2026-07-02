@@ -7,6 +7,14 @@ import AnkiOld from './components/AnkiOld.vue';
 import Anki from './components/Anki.vue';
 const msg = ref({
   payload: {
+    protocol: {
+      allAvailable: [
+          { id: "Humidity19933", type: "AUTO", desc: "Сповіджає нас кожні 5 хв про те, що вологість у столиці знаходиться поза межами пристойности." },
+          { id: "Welcome99", type: "AUTO", desc: "Грає зустрічальну мелодію у столиці, повідомляється час відсутності вдома та, у разі сутінків, вмикає світло." },
+          { id: "GoodNightFallout1", type: "TRIG", desc: "Вимикає ноут, реле, RGB, грає колискова" },
+          { id: "Devotion3442", type: "AUTO", desc: "Коли ми в столиці, вмикається Radiohead у разі, якщо написав кавунчик" }
+      ]
+    },
     theme: {
         rgb_hex: "#FF0000",
         text: "FFFFFF"

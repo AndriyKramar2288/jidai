@@ -1,15 +1,11 @@
 <template>
-    <div
-        v-if="msg && msg.payload && msg.payload.anki"
-        class="flex flex-col items-center gap-2 w-full"
-        :style="{
+    <div v-if="msg && msg.payload && msg.payload.anki" class="flex flex-col items-center gap-2 w-full" :style="{
             '--text': (msg?.payload?.theme?.text || '#FFFFFF'),
             '--rgb0': (msg?.payload?.theme?.rgb_hex || '#000000'),
             '--rgb1': (msg?.payload?.theme?.rgb_hex || '#000000') + '44',
             '--rgb2': (msg?.payload?.theme?.rgb_hex || '#000000') + '99',
             '--rgb3': (msg?.payload?.theme?.rgb_hex || '#000000') + '22'
-        }"
-    >
+        }">
         <div class="flex gap-2">
             <div class="w-2 bg-[var(--rgb1)] rounded-xs"></div>
             <h1 class="text-3xl font-bold text-[var(--text)] px-4 py-2 bg-[var(--rgb1)] rounded-xs">
@@ -36,15 +32,10 @@
             <button @click="prev" class="px-2 py-1 bg-[var(--rgb1)] rounded-sm">‹</button>
 
             <div class="w-[320px] overflow-hidden">
-                <div
-                    class="flex transition-transform duration-300"
-                    :style="{ transform: `translateX(-${index * 100}%)` }"
-                >
-                    <div
-                        v-for="(deck, i) in decks"
-                        :key="i"
-                        class="min-w-full bg-[var(--rgb3)] rounded-sm p-4 flex flex-col gap-2"
-                    >
+                <div class="flex transition-transform duration-300"
+                    :style="{ transform: `translateX(-${index * 100}%)` }">
+                    <div v-for="(deck, i) in decks" :key="i"
+                        class="min-w-full bg-[var(--rgb3)] rounded-sm p-4 flex flex-col gap-2">
                         <div class="font-bold text-[var(--text)] truncate">
                             {{ deck.name }}
                         </div>
@@ -76,7 +67,7 @@
 </template>
 
 <script>
-export default {
+    export default {
     props: ["msg"],
     data() {
         return {
