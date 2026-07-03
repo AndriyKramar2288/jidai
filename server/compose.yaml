@@ -60,7 +60,7 @@ services:
       - app-network
 
   servlets:
-    image: jetty:11-jre21-alpine
+    image: jetty:11-jre21
     container_name: lightweight-jetty
     networks:
       - app-network

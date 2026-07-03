@@ -112,7 +112,7 @@ void sendToBridge(String message, bool force = false) {
 
 void relayStateUpdate(bool state) {
   String payload = "{\"enable\": " + String(state ? "true" : "false") + "}";
-  sendToBridge("PUB|" + String(RELAY_TOPIC_STATE) + "|" + payload);
+  sendToBridge("PUB_RET|" + String(RELAY_TOPIC_STATE) + "|" + payload);
 }
 
 void rgbStateUpdate() {
@@ -120,7 +120,7 @@ void rgbStateUpdate() {
                    ", \"red\": " + String(targetR) +
                    ", \"green\": " + String(targetG) +
                    ", \"blue\": " + String(targetB) + "}";
-  sendToBridge("PUB|" + String(RGB_TOPIC_STATE) + "|" + payload);
+  sendToBridge("PUB_RET|" + String(RGB_TOPIC_STATE) + "|" + payload);
 }
 
 // ------------- SITUABLE FUNCTIONS -------------
@@ -266,7 +266,6 @@ void bleTaskCode(void * parameter) {
       }
       delay(200);
       pClient->disconnect();
-      bleUpdateFinished = true;
       break;
 
     } else {
@@ -275,6 +274,7 @@ void bleTaskCode(void * parameter) {
     }
   }
   delete pClient;
+  bleUpdateFinished = true;
   bleTaskHandle = NULL;
   vTaskDelete(NULL);
 }
@@ -346,7 +346,8 @@ void bridgeProcess() {
     if (data == "SYS|REQ_INIT") {
       String initStr = "INIT|" + String(ssid) + "|" + String(password) + "|" + 
                        String(mqtt_server) + "|" + String(mqtt_server_user) + "|" + 
-                       String(mqtt_server_password) + "|jidai/capital/esp32main/+/cmd";
+                       String(mqtt_server_password) + "|jidai/capital/esp32main/+/cmd|" + 
+                       String(GLOBAL_STATUS_TOPIC);
       
       isBridgeReady = true;
       sendToBridge(initStr); // Відправляємо з логуванням
@@ -358,7 +359,7 @@ void bridgeProcess() {
     else if (data == "SYS|MQTT_OK") {
       printScreen("NET: MQTT Connected!");
       // Публікуємо статус онлайн
-      sendToBridge("PUB|" + String(GLOBAL_STATUS_TOPIC) + "|{\"status\":\"online\"}");
+      sendToBridge("PUB_RET|" + String(GLOBAL_STATUS_TOPIC) + "|{\"status\":\"online\"}");
       relayStateUpdate(false);
     }
     // 3. ОБРОБЛЯЄМО КОМАНДИ З ІНТЕРНЕТУ
