@@ -89,6 +89,20 @@ services:
     networks:
       - app-network
 
+  vikunja:
+    image: vikunja/vikunja:latest
+    container_name: vikunja
+    restart: unless-stopped
+    environment:
+      VIKUNJA_DATABASE_TYPE: sqlite
+      VIKUNJA_DATABASE_PATH: /app/vikunja/files/vikunja.db
+      VIKUNJA_SERVICE_PUBLICURL: "https://banew.duckdns.org/vikunja/"
+      VIKUNJA_SERVICE_SECRET: ${VIKUNJA_JWT_SECRET}
+    volumes:
+      - vikunja_data:/app/vikunja/files
+    networks:
+      - app-network
+
 networks:
   app-network:
     driver: bridge
@@ -98,3 +112,4 @@ volumes:
   mosquitto_data:
   mosquitto_log:
   nodered_data:
+  vikunja_data:
