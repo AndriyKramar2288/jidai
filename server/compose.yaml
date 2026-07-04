@@ -6,10 +6,11 @@ services:
     ports:
       - "80:80"       # HTTP
       - "443:443"     # HTTPS
-      - "8883:8883"   # MQTTS (РЎРµСЂС‚РёС„С–РєР°С‚Рё)
+      - "8883:8883"   # MQTTS
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./docs:/var/www/docs:ro
     depends_on:
       - mosquitto
       - nodered
@@ -102,6 +103,13 @@ services:
       VIKUNJA_SERVICE_SECRET: ${VIKUNJA_JWT_SECRET}
     volumes:
       - vikunja_data:/app/vikunja/files
+    networks:
+      - app-network
+
+  asyncapi-studio:
+    image: asyncapi/studio:latest
+    container_name: asyncapi-studio
+    restart: unless-stopped
     networks:
       - app-network
 
