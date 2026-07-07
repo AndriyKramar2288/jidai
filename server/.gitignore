@@ -4,3 +4,7 @@ certs/*
 tomcat/webapps/*
 !tomcat/webapps/.gitkeep
 webapps
+
+authelia/configuration.yml
+authelia/users_database.yml
+docs/asyncapi.yaml
