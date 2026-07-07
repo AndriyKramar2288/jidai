@@ -1,0 +1,47 @@
+asyncapi: '2.6.0'
+info:
+  title: Banew Home Data Bus
+  version: '1.0.0'
+  description: Центральна шина подій для агрегації даних, розумного будинку та трекінгу продуктивності.
+servers:
+  local-mqtt:
+    url: mqtt://192.168.1.X:1883 # IP твого сервера
+    protocol: mqtt
+    description: Основний Mosquitto брокер
+channels:
+  banew/pc/browser/active_tab:
+    description: Топік для надсилання даних про активну вкладку браузера.
+    publish:
+      message:
+        $ref: '#/components/messages/EventPayload'
+
+  banew/bedroom/desk_lamp/power:
+    description: Статус настільної лампи (увімкнено/вимкнено).
+    publish:
+      message:
+        $ref: '#/components/messages/EventPayload'
+
+# Тут ми описуємо універсальний формат JSON, про який домовлялися
+components:
+  messages:
+    EventPayload:
+      name: StandardEvent
+      title: Універсальна подія
+      payload:
+        type: object
+        required:
+          - action
+          - timestamp
+        properties:
+          action:
+            type: string
+            description: Що відбулося (наприклад, viewed, changed)
+          value:
+            type: string
+            description: Значення події (URL вкладки, статус ON/OFF)
+          duration_sec:
+            type: integer
+            description: Тривалість у секундах (якщо застосовно)
+          timestamp:
+            type: string
+            format: date-time

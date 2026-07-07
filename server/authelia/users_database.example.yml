@@ -1,0 +1,7 @@
+users:
+  # <<admin username>>:
+    displayname: # admin displayname
+    password: # HASH of the password
+    email: # admin email
+    groups:
+      - admins

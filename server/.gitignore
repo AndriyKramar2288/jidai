@@ -7,4 +7,6 @@ webapps
 
 authelia/configuration.yml
 authelia/users_database.yml
+authelia/db.sqlite3
+authelia/notifications.txt
 docs/asyncapi.yaml
