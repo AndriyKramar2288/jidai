@@ -22,7 +22,8 @@ jobs:
             cd /home/ubuntu/jidai
             
             # Стягуємо останні зміни
-            git pull origin master
+            git fetch origin
+            git reset --hard origin/master
             
             # Заходимо в папку сервера
             cd server
