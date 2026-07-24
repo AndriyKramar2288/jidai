@@ -23,7 +23,7 @@ jobs:
             
             # Стягуємо останні зміни
             git fetch origin
-            git reset --hard origin/master
+            git reset origin/master
             
             # Заходимо в папку сервера
             cd server
