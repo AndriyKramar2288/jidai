@@ -18,18 +18,15 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            # Переходимо в папку проєкту
             cd /home/ubuntu/jidai
             
-            # Стягуємо останні зміни
             git fetch origin
-            git reset origin/master
+            git reset --hard origin/master
             
-            # Заходимо в папку сервера
             cd server
             
-            # Робимо "розумний" апдейт
             docker compose up -d --build
             
-            # (Опціонально) Очищаємо старі імеджі, щоб не забити диск
+            docker exec nginx-proxy nginx -s reload
+
             docker image prune -f
