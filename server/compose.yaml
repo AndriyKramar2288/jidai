@@ -16,7 +16,7 @@ services:
       - mosquitto
       - nodered
       - servlets
-      - vikunja
+      - memos
       - authelia
     networks:
       - app-network
