@@ -90,18 +90,12 @@ services:
     networks:
       - app-network
 
-  vikunja:
-    image: vikunja/vikunja:latest
-    container_name: vikunja
+  memos:
+    image: ghcr.io/usememos/memos:latest
+    container_name: memos
     restart: unless-stopped
-    user: "0:0"
-    environment:
-      VIKUNJA_DATABASE_TYPE: sqlite
-      VIKUNJA_DATABASE_PATH: /app/vikunja/files/vikunja.db
-      VIKUNJA_SERVICE_PUBLICURL: "https://vikunja.banew.duckdns.org/"
-      VIKUNJA_SERVICE_SECRET: ${VIKUNJA_JWT_SECRET}
     volumes:
-      - vikunja_data:/app/vikunja/files
+      - memos_data:/var/opt/memos
     networks:
       - app-network
 
