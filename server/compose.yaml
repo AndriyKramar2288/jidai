@@ -91,7 +91,7 @@ services:
       - app-network
 
   memos:
-    image: ghcr.io/usememos/memos:latest
+    image: ghcr.io/usememos/memos:v0.21.0
     container_name: memos
     restart: unless-stopped
     volumes:
