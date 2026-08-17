@@ -99,6 +99,15 @@ services:
     networks:
       - app-network
 
+  actual:
+    image: actualbudget/actual-server:latest
+    container_name: actual-budget
+    restart: unless-stopped
+    volumes:
+      - actual_data:/data
+    networks:
+      - app-network
+
   authelia:
     image: authelia/authelia:latest
     container_name: authelia
@@ -123,3 +132,4 @@ volumes:
   mosquitto_log:
   nodered_data:
   memos_data:
+  actual_data:
