@@ -142,9 +142,6 @@ services:
     image: f0rc3/barcodebuddy:latest
     container_name: barcodebuddy
     restart: unless-stopped
-    environment:
-      - BBUDDY_URL=http://grocy:80/api/
-      - BBUDDY_API_KEY=${GROCY_API_KEY}
     volumes:
       - barcodebuddy_data:/config
     networks:
