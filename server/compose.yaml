@@ -139,7 +139,7 @@ services:
       - app-network
 
   barcodebuddy:
-    image: f0rc3/barcodebuddy-docker:latest
+    image: f0rc3/barcodebuddy:latest
     container_name: barcodebuddy
     restart: unless-stopped
     environment:
