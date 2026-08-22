@@ -27,6 +27,10 @@ volatile bool radarTriggered = false;
 #define SOIL_PER 10000
 unsigned long soilTimer = 0;
 
+// Глобальний таймер відправки в мережу
+unsigned long lastNetworkActivity = 0; 
+#define RADAR_BLIND_TIME 100 // Сліпа зона в мілісекундах (100 мс після відправки WiFi пакета)
+
 // Мікрофон
 #define MIC_THRESHOLD 2500
 #define MIC_COOLDOWN 500
@@ -94,13 +98,23 @@ void soilMoistureProcess() {
     
     String payload = "{\"soil_raw\": " + String(rawValue) + "}";
     client.publish(SOIL_MOISTURE_TOPIC, payload.c_str());
+    
+    lastNetworkActivity = millis();
   }
 }
 
 void radarProcess() {
   if (radarTriggered) {
     radarTriggered = false;
-    client.publish(RADAR_TOPIC, ("{\"active\": " + String(digitalRead(RADAR_PIN)) + "}").c_str());
+    bool radarValue = digitalRead(RADAR_PIN);
+
+    if (millis() - lastNetworkActivity < RADAR_BLIND_TIME && radarValue) {
+        Serial.println("Радар проігноровано через наводку Wi-Fi!");
+        return;
+    }
+
+    client.publish(RADAR_TOPIC, ("{\"active\": " + String(radarValue) + "}").c_str());
+    lastNetworkActivity = millis();
   }
 }
 
@@ -112,6 +126,7 @@ void micProcess() {
     
     String payload = "{\"loudness\": " + String(rawMic) + "}";
     client.publish(MIC_TOPIC, payload.c_str());
+    lastNetworkActivity = millis();
     
     Serial.printf("Mic triggered! Loudness: %d\n", rawMic);
   }
