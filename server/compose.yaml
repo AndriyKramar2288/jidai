@@ -18,6 +18,8 @@ services:
       - servlets
       - memos
       - authelia
+      - grocy
+      - actual
     networks:
       - app-network
 
@@ -122,6 +124,19 @@ services:
       - AUTHELIA_SESSION_SECRET=${AUTHELIA_SESSION_SECRET}
       - AUTHELIA_STORAGE_ENCRYPTION_KEY=${AUTHELIA_STORAGE_ENCRYPTION_KEY}
 
+  grocy:
+    image: lscr.io/linuxserver/grocy:latest
+    container_name: grocy
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Kyiv
+    volumes:
+      - grocy_data:/config
+    networks:
+      - app-network
+
 networks:
   app-network:
     driver: bridge
@@ -133,3 +148,4 @@ volumes:
   nodered_data:
   memos_data:
   actual_data:
+  grocy_data:
