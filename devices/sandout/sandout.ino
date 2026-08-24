@@ -11,25 +11,19 @@
 // TOPICS
 #define GLOBAL_STATUS_TOPIC "jidai/capital/sandout/global/lwt"
 #define SOIL_MOISTURE_TOPIC "jidai/capital/sandout/soil/telemetry"
-#define RADAR_TOPIC         "jidai/capital/sandout/radar/telemetry"
 #define MIC_TOPIC           "jidai/capital/sandout/mic/telemetry"
 
 // PINS
-#define SOIL_MOISTURE_PIN 0 // Аналоговий вхід для датчика вологості
-#define MIC_PIN 1           // Аналоговий вхід для мікрофона
-#define RADAR_PIN 4
+#define SOIL1_PIN 0 // Датчик 1
+#define MIC_PIN   1 // Мікрофон
+#define SOIL2_PIN 3 // Датчик 2
+#define SOIL3_PIN 4 // Датчик 3
 
 // ------------- CONSTANTS -------------
-
-volatile bool radarTriggered = false;
 
 // Таймери
 #define SOIL_PER 10000
 unsigned long soilTimer = 0;
-
-// Глобальний таймер відправки в мережу
-unsigned long lastNetworkActivity = 0; 
-#define RADAR_BLIND_TIME 100 // Сліпа зона в мілісекундах (100 мс після відправки WiFi пакета)
 
 // Мікрофон
 #define MIC_THRESHOLD 2500
@@ -37,13 +31,7 @@ unsigned long lastNetworkActivity = 0;
 unsigned long lastMicTrigger = 0;
 
 WiFiClientSecure espClient;
-MQTTClient client(1024); // Створюємо клієнта з буфером 1024 байти
-
-// ------------- INTERRUPTS -------------
-
-void IRAM_ATTR handleRadarInterrupt() {
-  radarTriggered = true;
-}
+MQTTClient client(1024);
 
 // ------------- SETUP FUNCTIONS -------------
 
@@ -67,22 +55,15 @@ void reconnect() {
     
     String clientId = "sandout-Jidai";
 
-    // У цій бібліотеці Last Will and Testament налаштовується ДО команди connect
     client.setWill(GLOBAL_STATUS_TOPIC, "{\"status\":\"offline\"}", true, 1);
 
-    // Підключаємося (clientID, username, password)
     if (client.connect(clientId.c_str(), mqtt_server_user, mqtt_server_password)) {
       Serial.println("MQTT: connected!");
-      
-      // Надсилаємо статус online (retain = true, qos = 1)
       client.publish(GLOBAL_STATUS_TOPIC, "{\"status\":\"online\"}", true, 1);
-      
     } else {
-      // Функція lastError() поверне конкретний код помилки, якщо щось піде не так
       Serial.print("MQTT Failed, error = ");
       Serial.print(client.lastError());
       Serial.println(" ...trying again in 5 seconds");
-      
       delay(5000); 
     }
   }
@@ -94,27 +75,21 @@ void soilMoistureProcess() {
   if (millis() - soilTimer > SOIL_PER) {
     soilTimer = millis();
     
-    int rawValue = analogRead(SOIL_MOISTURE_PIN);
+    // Читаємо всі три датчики. 
+    // Між зчитуваннями аналогових пінів бажано робити мікрозатримку, 
+    // щоб АЦП встиг переключити мультиплексор і стабілізуватися.
+    int raw1 = analogRead(SOIL1_PIN);
+    delay(50);
+    int raw2 = analogRead(SOIL2_PIN);
+    delay(50);
+    int raw3 = analogRead(SOIL3_PIN);
     
-    String payload = "{\"soil_raw\": " + String(rawValue) + "}";
+    // Пакуємо всі три значення в один зручний JSON
+    String payload = "{\"soil1_raw\": " + String(raw1) + 
+                     ", \"soil2_raw\": " + String(raw2) + 
+                     ", \"soil3_raw\": " + String(raw3) + "}";
+                     
     client.publish(SOIL_MOISTURE_TOPIC, payload.c_str());
-    
-    lastNetworkActivity = millis();
-  }
-}
-
-void radarProcess() {
-  if (radarTriggered) {
-    radarTriggered = false;
-    bool radarValue = digitalRead(RADAR_PIN);
-
-    if (millis() - lastNetworkActivity < RADAR_BLIND_TIME && radarValue) {
-        Serial.println("Радар проігноровано через наводку Wi-Fi!");
-        return;
-    }
-
-    client.publish(RADAR_TOPIC, ("{\"active\": " + String(radarValue) + "}").c_str());
-    lastNetworkActivity = millis();
   }
 }
 
@@ -126,7 +101,6 @@ void micProcess() {
     
     String payload = "{\"loudness\": " + String(rawMic) + "}";
     client.publish(MIC_TOPIC, payload.c_str());
-    lastNetworkActivity = millis();
     
     Serial.printf("Mic triggered! Loudness: %d\n", rawMic);
   }
@@ -136,29 +110,25 @@ void micProcess() {
 
 void setup() {
   Serial.begin(115200);
-  delay(3000); // Затримка для ініціалізації USB-порту комп'ютером
+  delay(3000); 
   
   setupWifi();
-  
-  // Ініціалізуємо MQTT-брокер на порту 8883 з використанням TLS-клієнта
   client.begin(mqtt_server, 8883, espClient);
 
-  pinMode(SOIL_MOISTURE_PIN, INPUT);
+  pinMode(SOIL1_PIN, INPUT);
+  pinMode(SOIL2_PIN, INPUT);
+  pinMode(SOIL3_PIN, INPUT);
   pinMode(MIC_PIN, INPUT);
-  pinMode(RADAR_PIN, INPUT);
 
-  attachInterrupt(digitalPinToInterrupt(RADAR_PIN), handleRadarInterrupt, CHANGE);
-
-  Serial.println("sandout BOOTING...");
+  Serial.println("sandout BOOTING (Radar-free edition)...");
 }
 
 void loop() {
   if (!client.connected()) {
     reconnect();
   } else {
-    client.loop(); // Крутимо цикл тільки коли підключені
+    client.loop(); 
     
-    radarProcess();
     soilMoistureProcess();
     micProcess();
   }
