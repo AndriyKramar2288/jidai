@@ -7,6 +7,7 @@ import paho.mqtt.client as mqtt
 from tg_bridge import start_telegram, send_tg_message
 from anki_bridge import start_anki
 from spotinfo_bridge import start_spotinfo
+from mono_bridge import start_mono_server
 
 # --- ЗМІННІ СЕРЕДОВИЩА MQTT ---
 MQTT_BROKER = os.environ.get("MQTT_BROKER", "mosquitto")
@@ -64,9 +65,10 @@ async def main():
     tg_task = loop.create_task(start_telegram(mqtt_client))
     anki_task = loop.create_task(start_anki(mqtt_client))
     spotify_task = loop.create_task(start_spotinfo(mqtt_client))
+    mono_task = loop.create_task(start_mono_server(mqtt_client))
     
     # Чекаємо на їх виконання (вони працюватимуть нескінченно)
-    await asyncio.gather(tg_task, anki_task, spotify_task)
+    await asyncio.gather(tg_task, anki_task, spotify_task, mono_task)
 
 if __name__ == '__main__':
     loop.run_until_complete(main())

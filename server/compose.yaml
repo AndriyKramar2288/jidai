@@ -90,6 +90,11 @@ services:
       MQTT_PASSWORD: ${MQTT_PASSWORD}
       LASTFM_API_KEY: ${LASTFM_API_KEY}
       LASTFM_USER: ${LASTFM_USER}
+      ACTUAL_URL: "http://actual:5006"
+      ACTUAL_PASSWORD: ${ACTUAL_PASSWORD}
+      ACTUAL_SYNC_ID: ${ACTUAL_SYNC_ID}
+      MONO_ACC_MAP: ${MONO_ACC_MAP}
+      MONO_WEBHOOK_SECRET: ${MONO_WEBHOOK_SECRET}
     networks:
       - app-network
 
