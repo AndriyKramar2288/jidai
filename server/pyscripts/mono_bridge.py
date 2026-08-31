@@ -44,9 +44,6 @@ def push_to_actual(item: dict, actual_acc_id: str):
 
 
 async def handle_mono_webhook(request: web.Request):
-    if MONO_WEBHOOK_SECRET and request.match_info.get("secret") != MONO_WEBHOOK_SECRET:
-        return web.Response(status=404, text="Not Found")
-
     try:
         data = await request.json()
     except Exception:
