@@ -167,6 +167,8 @@ services:
     image: ghcr.io/azuracast/azuracast:latest
     container_name: azuracast
     restart: unless-stopped
+    environment:
+      - MYSQL_RANDOM_ROOT_PASSWORD=yes
     volumes:
       - azuracast_station_data:/var/azuracast/stations
       - azuracast_db_data:/var/lib/mysql
